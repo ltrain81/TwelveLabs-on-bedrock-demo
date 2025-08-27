@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Debug Upload</title>
+</head>
+<body>
+    <h1>Debug Video Upload</h1>
+    <input type="file" id="fileInput" accept="video/*">
+    <button onclick="debugUpload()">Debug Upload</button>
+    <div id="result"></div>
+
+    <script>
+        async function debugUpload() {
+            const fileInput = document.getElementById('fileInput');
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                alert('Please select a file');
+                return;
+            }
+
+            console.log('Selected file:', file.name, file.size, file.type);
+
+            try {
+                // Step 1: Get presigned URL
+                console.log('Step 1: Getting presigned URL...');
+                const response = await fetch('https://lxml4ei0kc.execute-api.ap-northeast-2.amazonaws.com/prod/upload', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        filename: file.name,
+                        contentType: file.type
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API failed: ${response.status}`);
+                }
+
+                const data = await response.json();
+                console.log('Presigned response:', data);
+
+                // Step 2: Create form data
+                console.log('Step 2: Creating form data...');
+                const formData = new FormData();
+                
+                Object.entries(data.fields).forEach(([key, value]) => {
+                    console.log('Adding field:', key, '=', value);
+                    formData.append(key, value);
+                });
+                
+                formData.append('file', file);
+                console.log('Form data created');
+
+                // Step 3: Upload to S3
+                console.log('Step 3: Uploading to S3...');
+                console.log('Upload URL:', data.uploadUrl);
+                
+                const uploadResponse = await fetch(data.uploadUrl, {
+                    method: 'POST',
+                    body: formData,
+                });
+
+                console.log('Upload response status:', uploadResponse.status);
+                console.log('Upload response headers:', [...uploadResponse.headers.entries()]);
+
+                if (uploadResponse.ok) {
+                    document.getElementById('result').innerHTML = '<p style="color: green;">Upload successful!</p>';
+                    console.log('Upload successful!');
+                } else {
+                    const errorText = await uploadResponse.text();
+                    console.error('Upload failed:', errorText);
+                    document.getElementById('result').innerHTML = '<p style="color: red;">Upload failed: ' + uploadResponse.status + ' ' + errorText + '</p>';
+                }
+
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('result').innerHTML = '<p style="color: red;">Error: ' + error.message + '</p>';
+            }
+        }
+    </script>
+</body>
+</html>

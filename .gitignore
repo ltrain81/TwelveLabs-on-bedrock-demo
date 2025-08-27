@@ -1,0 +1,128 @@
+# Environment variables and secrets
+.env
+.env.local
+.env.test
+.env.production
+
+# AWS credentials and config
+.aws/
+aws-config.json
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+env/
+
+# Python dependencies (should be installed via requirements.txt)
+backend/boto3*/
+backend/botocore*/
+backend/certifi*/
+backend/charset_normalizer*/
+backend/dateutil/
+backend/idna*/
+backend/jmespath*/
+backend/opensearchpy/
+backend/python_dateutil*/
+backend/requests*/
+backend/requests_aws4auth*/
+backend/s3transfer*/
+backend/six*
+backend/urllib3*/
+backend/aws_requests_auth*/
+backend/bin/
+
+# CDK output
+infrastructure/cdk.out/
+infrastructure/node_modules/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Coverage directory used by tools like istanbul
+coverage/
+
+# nyc test coverage
+.nyc_output
+
+# Dependency directories
+node_modules/
+jspm_packages/
+
+# Optional npm cache directory
+.npm
+
+# Optional REPL history
+.node_repl_history
+
+# Output of 'npm pack'
+*.tgz
+
+# Yarn Integrity file
+.yarn-integrity
+
+# Test videos and large files
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.wmv
+*.flv
+*.webm
+
+# Backup files
+*.bak
+*.backup
+*.orig
+
+# Temporary files
+tmp/
+temp/
+.tmp/
