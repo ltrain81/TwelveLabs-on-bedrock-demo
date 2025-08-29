@@ -6,7 +6,6 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
 import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as opensearchserverless from 'aws-cdk-lib/aws-opensearchserverless';
-import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
 import * as path from 'path';
 
@@ -34,7 +33,7 @@ export class InfrastructureStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
-    // CloudFront Origin Access Control - using CfnOriginAccessControl to match original template
+    // CloudFront Origin Access Control
     const originAccessControl = new cloudfront.CfnOriginAccessControl(this, 'VideoOAC', {
       originAccessControlConfig: {
         description: 'OAC for video streaming',
@@ -262,7 +261,7 @@ export class InfrastructureStack extends cdk.Stack {
       }]),
     });
 
-    // Package Lambda function with dependencies
+    // Lambda function
     const videoProcessingFunction = new lambda.Function(this, 'VideoProcessingFunction', {
       runtime: lambda.Runtime.PYTHON_3_11,
       handler: 'main.handler',
@@ -302,7 +301,6 @@ export class InfrastructureStack extends cdk.Stack {
       timeout: cdk.Duration.minutes(15),
       memorySize: 1024,
       role: lambdaRole,
-      description: 'Video processing function with debugging',
       environment: {
         VIDEO_BUCKET: videoBucket.bucketName,
         OPENSEARCH_ENDPOINT: vectorCollection.attrCollectionEndpoint,
@@ -310,13 +308,9 @@ export class InfrastructureStack extends cdk.Stack {
         AWS_ACCOUNT_ID: this.account,
         CLOUDFRONT_DOMAIN: distribution.domainName,
       },
-      logRetention: logs.RetentionDays.TWO_YEARS,
     });
 
-    // Add function name to environment variables after creation
-    videoProcessingFunction.addEnvironment('LAMBDA_FUNCTION_NAME', videoProcessingFunction.functionName);
-
-    // API Gateway REST API
+    // API Gateway
     const api = new apigateway.RestApi(this, 'VideoUnderstandingApi', {
       restApiName: 'Video Understanding API',
       description: 'API for video understanding using Twelve Labs models',
@@ -333,36 +327,18 @@ export class InfrastructureStack extends cdk.Stack {
       },
     });
 
-    // Lambda integration
-    const lambdaIntegration = new apigateway.LambdaIntegration(videoProcessingFunction);
+    const integration = new apigateway.LambdaIntegration(videoProcessingFunction);
 
-    // API endpoints
-    const uploadResource = api.root.addResource('upload');
-    uploadResource.addMethod('POST', lambdaIntegration);
-
-    const analyzeResource = api.root.addResource('analyze');
-    analyzeResource.addMethod('POST', lambdaIntegration);
-
-    const embedResource = api.root.addResource('embed');
-    embedResource.addMethod('POST', lambdaIntegration);
-
-    const searchResource = api.root.addResource('search');
-    searchResource.addMethod('GET', lambdaIntegration);
-
-    const statusResource = api.root.addResource('status');
-    statusResource.addMethod('GET', lambdaIntegration);
-
-    const videoUrlResource = api.root.addResource('video-url');
-    videoUrlResource.addMethod('GET', lambdaIntegration);
-
-    const flushOpenSearchResource = api.root.addResource('flush-opensearch');
-    flushOpenSearchResource.addMethod('POST', lambdaIntegration);
+    // Add API methods
+    api.root.addResource('upload').addMethod('POST', integration);
+    api.root.addResource('analyze').addMethod('POST', integration);
+    api.root.addResource('embed').addMethod('POST', integration);
+    api.root.addResource('search').addMethod('GET', integration);
+    api.root.addResource('status').addMethod('GET', integration);
+    api.root.addResource('video-url').addMethod('GET', integration);
+    api.root.addResource('flush-opensearch').addMethod('POST', integration);
 
     // Outputs
-    new cdk.CfnOutput(this, 'VideoUnderstandingApiEndpoint', {
-      value: api.url,
-    });
-
     new cdk.CfnOutput(this, 'ApiUrl', {
       description: 'API Gateway URL',
       value: api.url,
