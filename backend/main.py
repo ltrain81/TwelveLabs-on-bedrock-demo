@@ -809,7 +809,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
             return handle_upload(event, cors_headers)
         elif path == '/analyze' and method == 'POST':
             print("Routing to handle_analyze")
-            return handle_analyze(event, cors_headers)
+            return handle_analyze(event, cors_headers, context)
         elif path == '/embed' and method == 'POST':
             print("Routing to handle_embed")
             return handle_embed(event, cors_headers)
@@ -1131,7 +1131,7 @@ def handle_analysis_status(analysis_job_id: str, cors_headers: Dict[str, str]) -
             'body': json.dumps({'error': f'Failed to check analysis status: {str(e)}'})
         }
 
-def handle_analyze(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[str, Any]:
+def handle_analyze(event: Dict[str, Any], cors_headers: Dict[str, str], context: Any) -> Dict[str, Any]:
     """Handle video analysis using Twelve Labs Pegasus - start analysis and return job ID"""
     try:
         print("Starting video analysis...")
@@ -1197,7 +1197,7 @@ def handle_analyze(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[
         # Invoke Lambda asynchronously to process the analysis
         try:
             lambda_client = boto3.client('lambda', region_name=os.environ.get('REGION', 'us-east-1'))
-            function_name = os.environ.get('LAMBDA_FUNCTION_NAME')
+            function_name = os.environ.get('LAMBDA_FUNCTION_NAME') or context.function_name
             
             # Create payload for async processing
             async_payload = {
