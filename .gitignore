@@ -3,16 +3,29 @@
 .env.local
 .env.test
 .env.production
+.env.development
+.env.staging
 
 # AWS credentials and config
 .aws/
 aws-config.json
+aws-credentials
+.aws-sam/
+
+# API Keys and secrets
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.json
+config.json
 
 # Node modules
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+lerna-debug.log*
 
 # Python cache and virtual environments
 __pycache__/
@@ -37,6 +50,7 @@ wheels/
 *.egg
 venv/
 env/
+.venv/
 
 # Python dependencies (should be installed via requirements.txt)
 backend/boto3*/
@@ -56,9 +70,17 @@ backend/urllib3*/
 backend/aws_requests_auth*/
 backend/bin/
 
-# CDK output
+# CDK output and cache
 infrastructure/cdk.out/
 infrastructure/node_modules/
+cdk.out/
+.cdk.staging/
+cdk-outputs.json
+
+# CloudFormation templates (generated)
+*.template.json
+*.template.yaml
+video-understanding-stack.json
 
 # IDE and editor files
 .vscode/
@@ -66,6 +88,9 @@ infrastructure/node_modules/
 *.swp
 *.swo
 *~
+.project
+.classpath
+.settings/
 
 # OS generated files
 .DS_Store
@@ -75,10 +100,14 @@ infrastructure/node_modules/
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
 
 # Logs
 *.log
 logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Runtime data
 pids
@@ -88,6 +117,7 @@ pids
 
 # Coverage directory used by tools like istanbul
 coverage/
+*.lcov
 
 # nyc test coverage
 .nyc_output
@@ -116,13 +146,106 @@ jspm_packages/
 *.wmv
 *.flv
 *.webm
+*.m4v
+*.3gp
+*.ogv
+
+# Audio files
+*.mp3
+*.wav
+*.flac
+*.aac
+*.ogg
+*.wma
+
+# Image files (large ones)
+*.raw
+*.tiff
+*.bmp
+*.psd
 
 # Backup files
 *.bak
 *.backup
 *.orig
+*.tmp
 
 # Temporary files
 tmp/
 temp/
 .tmp/
+.temp/
+
+# Package files
+*.zip
+*.tar.gz
+*.rar
+*.7z
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Cache directories
+.cache/
+.parcel-cache/
+.next/
+.nuxt/
+.vuepress/dist/
+
+# Build outputs
+build/
+dist/
+out/
+
+# Test outputs
+test-results/
+coverage/
+
+# Local configuration files that might contain sensitive data
+local.json
+local.config.js
+local.settings.json
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# pyenv
+.python-version
+
+# pipenv
+Pipfile.lock
+
+# Claude/AI assistant files
+.claude/
+
+# Terraform files (if any)
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Serverless Framework
+.serverless/
+
+# Docker
+.dockerignore
+Dockerfile.local
+
+# MacOS
+.AppleDouble
+.LSOverride
+Icon
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.fuse_hidden*
+.directory
+.Trash-*

@@ -630,8 +630,149 @@ def handle_flush_opensearch(event: Dict[str, Any], cors_headers: Dict[str, str])
             'body': json.dumps({'error': f'Failed to flush OpenSearch: {str(e)}'})
         }
 
+def process_analysis_async(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Process video analysis asynchronously (called via direct Lambda invoke)"""
+    try:
+        print("=== ASYNC ANALYSIS PROCESSING START ===")
+        
+        analysis_job_id = event.get('analysisJobId')
+        s3_uri = event.get('s3Uri')
+        prompt = event.get('prompt')
+        video_id = event.get('videoId')
+        bucket_name = event.get('bucketName')
+        
+        print(f"Processing async analysis - Job ID: {analysis_job_id}")
+        print(f"S3 URI: {s3_uri}, Video ID: {video_id}")
+        print(f"Prompt length: {len(prompt) if prompt else 0}")
+        
+        if not all([analysis_job_id, s3_uri, prompt, bucket_name]):
+            raise ValueError("Missing required parameters for async analysis processing")
+        
+        import time
+        start_time = time.time()
+        
+        # Use invoke_model for Pegasus
+        request_body = {
+            "inputPrompt": prompt,
+            "mediaSource": {
+                "s3Location": {
+                    "uri": s3_uri,
+                    "bucketOwner": get_account_id()
+                }
+            },
+            "temperature": 0.2,
+            "maxOutputTokens": 4096
+        }
+        
+        print(f"Calling Bedrock Pegasus model with request: {json.dumps(request_body, indent=2)}")
+        
+        response = bedrock_client.invoke_model(
+            modelId='us.twelvelabs.pegasus-1-2-v1:0',
+            body=json.dumps(request_body),
+            contentType='application/json'
+        )
+        
+        print(f"Bedrock response status: {response['ResponseMetadata']['HTTPStatusCode']}")
+        response_body = json.loads(response['body'].read())
+        print(f"Analysis completed successfully. Response keys: {list(response_body.keys())}")
+        
+        # Store the analysis result in S3
+        analysis_result = {
+            'jobId': analysis_job_id,
+            'status': 'Completed',
+            'videoId': video_id,
+            's3Uri': s3_uri,
+            'prompt': prompt,
+            'analysis': response_body.get('message', ''),
+            'finishReason': response_body.get('finishReason', ''),
+            'endTime': time.time(),
+            'completedTime': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime()),
+            'processingTimeSeconds': time.time() - start_time
+        }
+        
+        # Store completed result
+        result_key = f"analysis/{analysis_job_id}/result.json"
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=result_key,
+            Body=json.dumps(analysis_result, indent=2),
+            ContentType='application/json'
+        )
+        
+        # Update job status
+        job_key = f"analysis/{analysis_job_id}/job_info.json"
+        job_info = {
+            'jobId': analysis_job_id,
+            'status': 'Completed',
+            'videoId': video_id,
+            's3Uri': s3_uri,
+            'prompt': prompt,
+            'endTime': time.time(),
+            'completedTime': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime()),
+            'processingTimeSeconds': time.time() - start_time
+        }
+        s3_client.put_object(
+            Bucket=bucket_name,
+            Key=job_key,
+            Body=json.dumps(job_info, indent=2),
+            ContentType='application/json'
+        )
+        
+        print(f"Analysis completed and stored at s3://{bucket_name}/{result_key}")
+        print(f"Processing time: {time.time() - start_time:.2f} seconds")
+        print("=== ASYNC ANALYSIS PROCESSING END ===")
+        
+        return {
+            'statusCode': 200,
+            'body': json.dumps({
+                'jobId': analysis_job_id,
+                'status': 'Completed',
+                'processingTime': time.time() - start_time
+            })
+        }
+        
+    except Exception as e:
+        print(f"Async analysis processing failed: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        
+        # Update job status to failed if we have the required info
+        if 'analysis_job_id' in locals() and 'bucket_name' in locals():
+            try:
+                job_key = f"analysis/{analysis_job_id}/job_info.json"
+                failed_job_info = {
+                    'jobId': analysis_job_id,
+                    'status': 'Failed',
+                    'error': str(e),
+                    'endTime': time.time(),
+                    'failedTime': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
+                }
+                s3_client.put_object(
+                    Bucket=bucket_name,
+                    Key=job_key,
+                    Body=json.dumps(failed_job_info, indent=2),
+                    ContentType='application/json'
+                )
+                print(f"Updated job status to failed in S3")
+            except Exception as update_error:
+                print(f"Failed to update job status: {update_error}")
+        
+        print("=== ASYNC ANALYSIS PROCESSING END (ERROR) ===")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': str(e),
+                'jobId': locals().get('analysis_job_id', 'unknown')
+            })
+        }
+
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """Main Lambda handler for video understanding API"""
+    
+    # Check if this is an async processing request (direct Lambda invoke, not API Gateway)
+    if 'action' in event and event.get('action') == 'process_analysis':
+        print("Processing async analysis request")
+        return process_analysis_async(event)
     
     print(f"Received event: {event.get('httpMethod')} {event.get('path')}")
     event_body = event.get('body', 'No body')
@@ -892,15 +1033,114 @@ def wait_for_s3_object(s3_uri: str, max_wait_seconds: int = 30) -> bool:
     print(f"S3 object not found after waiting {max_wait_seconds} seconds")
     return False
 
+def handle_analysis_status(analysis_job_id: str, cors_headers: Dict[str, str]) -> Dict[str, Any]:
+    """Check status of Pegasus analysis job and retrieve results from S3"""
+    try:
+        print(f"Checking analysis status for job: {analysis_job_id}")
+        
+        bucket_name = os.environ.get('VIDEO_BUCKET')
+        job_key = f"analysis/{analysis_job_id}/job_info.json"
+        result_key = f"analysis/{analysis_job_id}/result.json"
+        
+        # First, check if job info exists
+        try:
+            job_response = s3_client.get_object(Bucket=bucket_name, Key=job_key)
+            job_info = json.loads(job_response['Body'].read())
+            print(f"Found job info: {job_info.get('status', 'Unknown')}")
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') == 'NoSuchKey':
+                print(f"Analysis job {analysis_job_id} not found")
+                return {
+                    'statusCode': 404,
+                    'headers': cors_headers,
+                    'body': json.dumps({'error': f'Analysis job {analysis_job_id} not found'})
+                }
+            raise
+        
+        job_status = job_info.get('status', 'Unknown')
+        
+        if job_status == 'Completed':
+            # Try to get the analysis result
+            try:
+                result_response = s3_client.get_object(Bucket=bucket_name, Key=result_key)
+                result_data = json.loads(result_response['Body'].read())
+                print(f"Retrieved analysis result for job {analysis_job_id}")
+                
+                return {
+                    'statusCode': 200,
+                    'headers': cors_headers,
+                    'body': json.dumps({
+                        'status': 'Completed',
+                        'jobId': analysis_job_id,
+                        'videoId': result_data.get('videoId', 'unknown'),
+                        'analysis': result_data.get('analysis', ''),
+                        'finishReason': result_data.get('finishReason', ''),
+                        'prompt': result_data.get('prompt', ''),
+                        'processingTime': result_data.get('processingTimeSeconds', 0),
+                        'completedTime': result_data.get('completedTime', ''),
+                        'message': 'Analysis completed successfully'
+                    })
+                }
+                
+            except ClientError as e:
+                if e.response.get('Error', {}).get('Code') == 'NoSuchKey':
+                    print(f"Result file not found for completed job {analysis_job_id}")
+                    return {
+                        'statusCode': 200,
+                        'headers': cors_headers,
+                        'body': json.dumps({
+                            'status': 'Completed',
+                            'message': 'Analysis completed but result file not found',
+                            'jobId': analysis_job_id
+                        })
+                    }
+                raise
+                
+        elif job_status == 'Failed':
+            return {
+                'statusCode': 200,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'status': 'Failed',
+                    'jobId': analysis_job_id,
+                    'error': job_info.get('error', 'Analysis failed'),
+                    'message': 'Analysis failed'
+                })
+            }
+        
+        else:  # InProgress or other status
+            return {
+                'statusCode': 200,
+                'headers': cors_headers,
+                'body': json.dumps({
+                    'status': job_status,
+                    'jobId': analysis_job_id,
+                    'message': f'Analysis is {job_status.lower()}',
+                    'videoId': job_info.get('videoId', 'unknown'),
+                    'submitTime': job_info.get('submitTime', '')
+                })
+            }
+            
+    except Exception as e:
+        print(f"Error checking analysis status: {e}")
+        import traceback
+        print(f"Full traceback: {traceback.format_exc()}")
+        return {
+            'statusCode': 500,
+            'headers': cors_headers,
+            'body': json.dumps({'error': f'Failed to check analysis status: {str(e)}'})
+        }
+
 def handle_analyze(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[str, Any]:
-    """Handle video analysis using Twelve Labs Pegasus (synchronous)"""
+    """Handle video analysis using Twelve Labs Pegasus - start analysis and return job ID"""
     try:
         print("Starting video analysis...")
         body = json.loads(event.get('body', '{}'))
         s3_uri = body.get('s3Uri')
         prompt = body.get('prompt', 'Analyze this video and provide a detailed description')
+        video_id = body.get('videoId', 'unknown')
         
-        print(f"Analysis request - S3 URI: {s3_uri}, Prompt length: {len(prompt)}")
+        print(f"Analysis request - S3 URI: {s3_uri}, Video ID: {video_id}, Prompt length: {len(prompt)}")
         
         if not s3_uri:
             print("ERROR: S3 URI is required but not provided")
@@ -918,37 +1158,101 @@ def handle_analyze(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[
                 'body': json.dumps({'error': 'Video file not found in S3. Please ensure the upload completed successfully.'})
             }
         
-        # Use synchronous invoke for Pegasus (doesn't support async)
-        request_body = {
-            "inputPrompt": prompt,
-            "mediaSource": {
-                "s3Location": {
-                    "uri": s3_uri,
-                    "bucketOwner": get_account_id()
-                }
-            },
-            "temperature": 0.2,
-            "maxOutputTokens": 4096
+        # Generate unique analysis job ID
+        import uuid
+        import time
+        analysis_job_id = f"analysis_{int(time.time())}_{str(uuid.uuid4())[:8]}"
+        
+        # Create analysis job info to store in S3
+        job_info = {
+            'jobId': analysis_job_id,
+            'status': 'InProgress',
+            'videoId': video_id,
+            's3Uri': s3_uri,
+            'prompt': prompt,
+            'startTime': time.time(),
+            'submitTime': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
         }
         
-        print(f"Calling Bedrock Pegasus model with request: {json.dumps(request_body, indent=2)}")
+        # Store job info in S3 first
+        bucket_name = os.environ.get('VIDEO_BUCKET')
+        job_key = f"analysis/{analysis_job_id}/job_info.json"
         
-        response = bedrock_client.invoke_model(
-            modelId='us.twelvelabs.pegasus-1-2-v1:0',
-            body=json.dumps(request_body),
-            contentType='application/json'
-        )
+        try:
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=job_key,
+                Body=json.dumps(job_info, indent=2),
+                ContentType='application/json'
+            )
+            print(f"Stored analysis job info at s3://{bucket_name}/{job_key}")
+        except Exception as e:
+            print(f"Failed to store job info: {e}")
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to initialize analysis job: {str(e)}'})
+            }
         
-        print(f"Bedrock response status: {response['ResponseMetadata']['HTTPStatusCode']}")
-        response_body = json.loads(response['body'].read())
-        print(f"Analysis completed successfully. Response keys: {list(response_body.keys())}")
+        # Invoke Lambda asynchronously to process the analysis
+        try:
+            lambda_client = boto3.client('lambda', region_name=os.environ.get('REGION', 'us-east-1'))
+            function_name = os.environ.get('LAMBDA_FUNCTION_NAME')
+            
+            # Create payload for async processing
+            async_payload = {
+                'action': 'process_analysis',  # Special action for async processing
+                'analysisJobId': analysis_job_id,
+                's3Uri': s3_uri,
+                'prompt': prompt,
+                'videoId': video_id,
+                'bucketName': bucket_name
+            }
+            
+            print(f"Invoking Lambda function asynchronously for job {analysis_job_id}")
+            print(f"Function name: {function_name}")
+            print(f"Async payload: {json.dumps(async_payload, indent=2)}")
+            
+            # Invoke Lambda asynchronously (Event invocation type)
+            lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType='Event',  # Async invocation
+                Payload=json.dumps(async_payload)
+            )
+            
+            print(f"Lambda function invoked asynchronously for analysis job {analysis_job_id}")
+            
+        except Exception as e:
+            print(f"Failed to invoke Lambda asynchronously: {e}")
+            # Update job status to failed
+            job_info.update({
+                'status': 'Failed',
+                'error': f'Failed to start async processing: {str(e)}',
+                'endTime': time.time(),
+                'failedTime': time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())
+            })
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=job_key,
+                Body=json.dumps(job_info, indent=2),
+                ContentType='application/json'
+            )
+            
+            return {
+                'statusCode': 500,
+                'headers': cors_headers,
+                'body': json.dumps({'error': f'Failed to start analysis: {str(e)}'})
+            }
         
+        # Return job ID immediately for status checking
         return {
-            'statusCode': 200,
+            'statusCode': 202,
             'headers': cors_headers,
             'body': json.dumps({
-                'analysis': response_body.get('message', ''),
-                'finishReason': response_body.get('finishReason', '')
+                'analysisJobId': analysis_job_id,
+                'status': 'processing',
+                'message': 'Analysis started successfully. Use /status endpoint to check progress.',
+                'videoId': video_id
             })
         }
     
@@ -1087,19 +1391,25 @@ def handle_embed(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[st
         }
 
 def handle_status(event: Dict[str, Any], cors_headers: Dict[str, str]) -> Dict[str, Any]:
-    """Check status of async invocation and retrieve results"""
+    """Check status of async invocation OR analysis job and retrieve results"""
     try:
         query_params = event.get('queryStringParameters', {}) or {}
         invocation_arn = query_params.get('invocationArn')
+        analysis_job_id = query_params.get('analysisJobId')
         
-        print(f"Status check request - ARN: {invocation_arn}")
+        print(f"Status check request - ARN: {invocation_arn}, Analysis Job ID: {analysis_job_id}")
         
+        # Handle analysis job status check
+        if analysis_job_id:
+            return handle_analysis_status(analysis_job_id, cors_headers)
+        
+        # Handle embedding status check (existing functionality)
         if not invocation_arn:
-            print("ERROR: No invocation ARN provided")
+            print("ERROR: Neither invocation ARN nor analysis job ID provided")
             return {
                 'statusCode': 400,
                 'headers': cors_headers,
-                'body': json.dumps({'error': 'invocationArn parameter is required'})
+                'body': json.dumps({'error': 'Either invocationArn or analysisJobId parameter is required'})
             }
         
         # Get invocation status

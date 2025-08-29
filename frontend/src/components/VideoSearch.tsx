@@ -197,12 +197,33 @@ const VideoSearch: React.FC = () => {
                 return `${minutes}:${secs.toString().padStart(2, '0')}`;
               };
 
+              // Deduplicate results by video + timestamp
+              const deduplicatedResults = currentResults.results.reduce((acc, result) => {
+                const dedupeKey = `${result.videoId}-${result.startSec}-${result.endSec}`;
+                
+                // Keep the result with the best score (highest for opensearch, lowest for s3vectors)
+                if (!acc[dedupeKey] || 
+                    (activeTab === 'opensearch' && result.score > acc[dedupeKey].score) ||
+                    (activeTab === 's3vectors' && result.score < acc[dedupeKey].score)) {
+                  acc[dedupeKey] = result;
+                }
+                
+                return acc;
+              }, {} as Record<string, SearchResult>);
+              
+              const uniqueResults = Object.values(deduplicatedResults);
+
               return (
                 <div className="search-results">
                   <div className="system-header">
                     <h4>{systemName} Results - {currentResults.search_time_ms}ms</h4>
+                    {uniqueResults.length !== currentResults.results.length && (
+                      <p style={{ fontSize: '0.9em', color: '#666', marginTop: '5px' }}>
+                        Showing {uniqueResults.length} unique results (deduplicated from {currentResults.results.length} total)
+                      </p>
+                    )}
                   </div>
-                  {currentResults.results.map((result, index) => {
+                  {uniqueResults.map((result, index) => {
                     const resultKey = `${activeTab}-${result.videoId}-${result.segmentId}-${result.startSec}`;
                     const isExpanded = expandedVideos.has(resultKey);
                     

@@ -14,25 +14,30 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [embeddingStatus, setEmbeddingStatus] = useState<string | null>(null);
-  const [analysisInvocationArn, setAnalysisInvocationArn] = useState<string | null>(null);
+  const [analysisJobId, setAnalysisJobId] = useState<string | null>(null);
+  const [analysisStatus, setAnalysisStatus] = useState<string | null>(null);
   const [embeddingInvocationArn, setEmbeddingInvocationArn] = useState<string | null>(null);
 
-  const API_BASE_URL = process.env.REACT_APP_API_URL || 'https://your-api-gateway-url';
+  const API_BASE_URL = (process.env.REACT_APP_API_URL || 'https://your-api-gateway-url').replace(/\/+$/, '');
 
   const analyzeVideo = async () => {
     setLoading(true);
     setError(null);
     setAnalysis(null);
-    setAnalysisInvocationArn(null);
+    setAnalysisJobId(null);
+    setAnalysisStatus(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/analyze`, {
+      const analyzeUrl = `${API_BASE_URL}/analyze`;
+      console.log('Making analyze request to:', analyzeUrl);
+      const response = await fetch(analyzeUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           s3Uri: video.s3Uri,
+          videoId: video.key,
           prompt: prompt,
         }),
       });
@@ -47,11 +52,14 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
 
       const result = await response.json();
       
-      // Pegasus is now synchronous, so we get the result immediately
-      if (result.analysis) {
-        setAnalysis(result.analysis);
+      if (result.analysisJobId) {
+        setAnalysisJobId(result.analysisJobId);
+        setAnalysisStatus('Analysis started and running asynchronously. Use "Check Analysis Status" button to get results.');
+        
+        // Don't wait - let user check status manually
+        console.log(`Analysis job ${result.analysisJobId} started successfully`);
       } else {
-        setAnalysis('Analysis completed but no content returned');
+        throw new Error('No analysis job ID received');
       }
 
     } catch (err) {
@@ -61,26 +69,39 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
     }
   };
 
+
   const checkAnalysisStatus = async () => {
-    if (!analysisInvocationArn) return;
+    if (!analysisJobId) {
+      setError('No analysis job ID available. Please start an analysis first.');
+      return;
+    }
+
+    setAnalysisStatus('Checking analysis status...');
+    setError(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/status?invocationArn=${encodeURIComponent(analysisInvocationArn)}`);
+      const response = await fetch(`${API_BASE_URL}/status?analysisJobId=${encodeURIComponent(analysisJobId)}`);
       
       if (!response.ok) {
-        throw new Error('Failed to check status');
+        const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errorData.error || 'Failed to check analysis status');
       }
 
       const result = await response.json();
       
-      if (result.status === 'Completed' && result.result) {
-        setAnalysis(result.result.message || result.result.analysis || JSON.stringify(result.result, null, 2));
+      if (result.status === 'Completed') {
+        setAnalysis(result.analysis || 'Analysis completed but no content returned');
+        setAnalysisStatus(`✅ Analysis completed successfully! Processing time: ${result.processingTime || 0}s`);
+      } else if (result.status === 'Failed') {
+        setError(result.error || 'Analysis failed');
+        setAnalysisStatus('❌ Analysis failed');
       } else {
-        setAnalysis(`Status: ${result.status} - ${result.message || 'Processing...'}`);
+        setAnalysisStatus(`Status: ${result.status} - ${result.message || 'Processing...'}`);
       }
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Status check failed');
+      setError(err instanceof Error ? err.message : 'Analysis status check failed');
+      setAnalysisStatus(null);
     }
   };
 
@@ -222,6 +243,16 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
               Check Embedding Status
             </button>
           )}
+
+          {analysisJobId && (
+            <button
+              className="upload-button"
+              onClick={checkAnalysisStatus}
+              style={{ backgroundColor: '#d69e2e' }}
+            >
+              Check Analysis Status
+            </button>
+          )}
         </div>
       </div>
 
@@ -240,6 +271,13 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
         </div>
       )}
 
+      {analysisStatus && (
+        <div className="success">
+          <h4>Analysis Status</h4>
+          <p style={{ whiteSpace: 'pre-wrap' }}>{analysisStatus}</p>
+        </div>
+      )}
+
       {embeddingStatus && (
         <div className="success">
           <h4>Embedding Status</h4>
@@ -251,11 +289,11 @@ const VideoAnalysis: React.FC<VideoAnalysisProps> = ({ video }) => {
       {error && <div className="error">{error}</div>}
 
       <div style={{ marginTop: '30px', padding: '20px', backgroundColor: '#f0f8ff', borderRadius: '5px' }}>
-        <h4>About the Models (Hybrid Processing):</h4>
+        <h4>About the Models (Async Processing):</h4>
         <ul style={{ textAlign: 'left', margin: '10px 0' }}>
-          <li><strong>Twelve Labs Pegasus:</strong> Provides comprehensive video understanding and analysis. Uses synchronous processing for immediate results.</li>
+          <li><strong>Twelve Labs Pegasus:</strong> Provides comprehensive video understanding and analysis. Uses async processing due to API Gateway timeout limits - click "Check Analysis Status" if it takes more than 10 seconds.</li>
           <li><strong>Twelve Labs Marengo:</strong> Generates embeddings from video content for similarity search. Uses async processing - click "Check Embedding Status" to get results.</li>
-          <li><strong>Processing Types:</strong> Pegasus returns results immediately, while Marengo processes asynchronously for better handling of large videos.</li>
+          <li><strong>Processing Types:</strong> Both models now use async processing for better handling of large videos and timeout management.</li>
         </ul>
       </div>
     </div>
